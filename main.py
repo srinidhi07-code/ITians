@@ -1,10 +1,19 @@
 # main.py
 import time
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from models import IncidentRequest
 from agent import run_agent
 
 app = FastAPI(title="Incident Response Agent", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # we will restrict later
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def root():
@@ -12,7 +21,7 @@ def root():
 
 @app.post("/analyze")
 def analyze_incident(incident: IncidentRequest):
-    for attempt in range(3):  # retry up to 3 times
+    for attempt in range(3):
         try:
             result = run_agent(
                 incident_id=incident.incident_id,

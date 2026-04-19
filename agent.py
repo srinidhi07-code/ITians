@@ -1,13 +1,13 @@
 # agent.py
 import os
-from google import genai
-from google.genai import types
+import json
+from groq import Groq
 from dotenv import load_dotenv
-from tools import execute_tool
+from tools import execute_tool, TOOLS
 
 load_dotenv()
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 SYSTEM_PROMPT = """You are an expert Incident Response AI Agent.
 When given an incident you must:
@@ -17,107 +17,93 @@ When given an incident you must:
 4. Give a clear final summary to the on-call engineer.
 Always call all 3 tools before giving your final answer."""
 
-gemini_tools = types.Tool(function_declarations=[
-    types.FunctionDeclaration(
-        name="analyze_incident",
-        description="Analyze an incident description to identify root cause and category",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "description": types.Schema(type=types.Type.STRING),
-                "severity":    types.Schema(type=types.Type.STRING),
-            },
-            required=["description", "severity"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="get_remediation_steps",
-        description="Get remediation steps for a specific incident type",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "incident_type": types.Schema(type=types.Type.STRING),
-            },
-            required=["incident_type"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="calculate_blast_radius",
-        description="Estimate how many users are affected based on severity and type",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "severity":      types.Schema(type=types.Type.STRING),
-                "incident_type": types.Schema(type=types.Type.STRING),
-            },
-            required=["severity", "incident_type"]
-        )
-    ),
-])
-
 
 def run_agent(incident_id: str, title: str, description: str, severity: str) -> dict:
     print(f"\n[Agent] Starting analysis for {incident_id}...")
 
-    user_message = f"""
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"""
 Incident ID: {incident_id}
 Title: {title}
 Severity: {severity}
 Description: {description}
 
 Analyze this incident and provide root cause, blast radius, and remediation steps.
-"""
-
-    contents = [types.Content(role="user", parts=[types.Part(text=user_message)])]
+"""}
+    ]
 
     try:
-        while True:
-            response = client.models.generate_content(
-               model="gemini-2.0-flash-lite",
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    tools=[gemini_tools],
-                )
+        max_iterations = 10  # safety limit
+        iteration = 0
+
+        while iteration < max_iterations:
+            iteration += 1
+            print(f"[Agent] Iteration {iteration}")
+
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                max_tokens=1024,
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto"
             )
 
-            print(f"[Agent] Response received")
-            print(f"[Agent] Full response: {response}")
+            choice = response.choices[0]
+            print(f"[Agent] Stop reason: {choice.finish_reason}")
 
-            contents.append(types.Content(
-                role="model",
-                parts=response.candidates[0].content.parts
-            ))
+            # Claude wants to call tools
+            if choice.finish_reason == "tool_calls":
+                # add assistant message to history
+                messages.append({
+                    "role": "assistant",
+                    "content": choice.message.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        }
+                        for tc in choice.message.tool_calls
+                    ]
+                })
 
-            tool_calls_found = False
+                # execute each tool
+                for tool_call in choice.message.tool_calls:
+                    tool_input = json.loads(tool_call.function.arguments)
+                    name = tool_call.function.name
 
-            for part in response.candidates[0].content.parts:
-                if part.function_call:
-                    tool_calls_found = True
-                    name = part.function_call.name
-                    args = dict(part.function_call.args)
-
-                    print(f"[Agent] Calling tool: {name} | args: {args}")
-                    result = execute_tool(name, args)
+                    print(f"[Agent] Calling tool: {name} | args: {tool_input}")
+                    result = execute_tool(name, tool_input)
                     print(f"[Agent] Tool result: {result}")
 
-                    contents.append(types.Content(
-                        role="user",
-                        parts=[types.Part(
-                            function_response=types.FunctionResponse(
-                                name=name,
-                                response={"result": result}
-                            )
-                        )]
-                    ))
-                    break
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": str(result)
+                    })
 
-            if not tool_calls_found:
+            # Final answer
+            elif choice.finish_reason == "stop":
+                final_text = choice.message.content
                 print("[Agent] Final answer ready.")
                 return {
                     "incident_id": incident_id,
-                    "analysis": response.text
+                    "analysis": final_text
                 }
+
+            else:
+                print(f"[Agent] Unknown stop reason: {choice.finish_reason}")
+                break
+
+        # If loop exceeded
+        return {
+            "incident_id": incident_id,
+            "analysis": "Agent completed analysis. Please check logs for details."
+        }
 
     except Exception as e:
         print(f"[Agent] ERROR: {type(e).__name__}: {str(e)}")

@@ -1,49 +1,53 @@
 # tools.py
 
-# --- Tool schemas (what Claude sees) ---
 TOOLS = [
     {
-        "name": "analyze_incident",
-        "description": "Analyze an incident's description to identify likely root cause and category",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "description": {"type": "string", "description": "The incident description"},
-                "severity": {"type": "string", "description": "Severity level"}
-            },
-            "required": ["description", "severity"]
+        "type": "function",
+        "function": {
+            "name": "analyze_incident",
+            "description": "Analyze an incident description to identify root cause and category",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "severity":    {"type": "string"}
+                },
+                "required": ["description", "severity"]
+            }
         }
     },
     {
-        "name": "get_remediation_steps",
-        "description": "Get remediation steps for a specific incident type",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "incident_type": {
-                    "type": "string",
-                    "enum": ["database", "network", "security", "application", "infrastructure"]
-                }
-            },
-            "required": ["incident_type"]
+        "type": "function",
+        "function": {
+            "name": "get_remediation_steps",
+            "description": "Get remediation steps for a specific incident type",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "incident_type": {"type": "string"}
+                },
+                "required": ["incident_type"]
+            }
         }
     },
     {
-        "name": "calculate_blast_radius",
-        "description": "Estimate how many users or systems are affected based on severity and type",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "severity": {"type": "string"},
-                "incident_type": {"type": "string"}
-            },
-            "required": ["severity", "incident_type"]
+        "type": "function",
+        "function": {
+            "name": "calculate_blast_radius",
+            "description": "Estimate how many users are affected",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "severity":      {"type": "string"},
+                    "incident_type": {"type": "string"}
+                },
+                "required": ["severity", "incident_type"]
+            }
         }
     }
 ]
 
 
-# --- Tool execution (what your code actually does) ---
 def execute_tool(tool_name: str, tool_input: dict) -> str:
 
     if tool_name == "analyze_incident":
